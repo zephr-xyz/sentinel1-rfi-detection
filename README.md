@@ -220,7 +220,7 @@ python create_map.py
 - Recchia, A., et al. (2017). "Impact of Radio Frequency Interference on Sentinel-1 SAR data." *ESA Living Planet Symposium*.
 - Meyer, F.J., et al. (2013). "Mapping GPS interference in Alaska using Sentinel-1." *IEEE Geoscience and Remote Sensing Letters*.
 - Tao, M., et al. (2019). "Radio Frequency Interference Detection and Mitigation for Sentinel-1." *IEEE Trans. Geoscience and Remote Sensing*.
-- Norwegian Communications Authority. [Jamertest](https://www.jamertest.no/). Annual GNSS jamming and spoofing test event.
+- Norwegian Communications Authority. [Jammertest](https://www.jamertest.no/). Annual GNSS jamming and spoofing test event.
 
 ## License
 
