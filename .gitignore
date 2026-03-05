@@ -1,0 +1,28 @@
+# Credentials
+.env
+
+# Output data
+output/downloads/
+output/*.html
+output/*.json
+output/*.png
+output/jamertest/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Internal
+zephr_blog_posts.txt
