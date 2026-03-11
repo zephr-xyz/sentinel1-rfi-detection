@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Generate spy-styled Leaflet map for Iran RFI detection results."""
+"""Generate spy-styled Leaflet map for Iran RFI detection results.
+Pre-bins points at each zoom level in Python for fast browser rendering."""
 import json
+import math
 from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
@@ -16,9 +18,13 @@ AOI_POLYGON = [
 ]
 AOI_LEAFLET = [[lat, lon] for lon, lat in AOI_POLYGON]
 
+GRID_SIZES = {
+    5: 0.5, 6: 0.25, 7: 0.1, 8: 0.05, 9: 0.025,
+    10: 0.01, 11: 0.005,
+}
+
 
 def load_data():
-    # Prefer temporal z-score data if available
     temporal = OUTPUT_DIR / "rfi_temporal.json"
     if temporal.exists():
         data = json.load(open(temporal))
@@ -35,6 +41,44 @@ def load_data():
             if scenes:
                 return scenes
     return []
+
+
+def prebin_points(points, cell_size):
+    """Bin points into grid cells and compute display properties."""
+    bins = {}
+    for lat, lon in points:
+        r = int(math.floor(lat / cell_size))
+        c = int(math.floor(lon / cell_size))
+        key = (r, c)
+        if key not in bins:
+            bins[key] = 0
+        bins[key] += 1
+
+    if not bins:
+        return []
+
+    counts = sorted(bins.values())
+    p85 = counts[int(len(counts) * 0.85)] if counts else 1
+    p95 = counts[int(len(counts) * 0.95)] if counts else 1
+    max_count = counts[-1] if counts else 1
+
+    # Compact format: [latMin, lonMin, count, colorIdx, opacity100, score]
+    # colorIdx: 0=green, 1=orange, 2=red
+    result = []
+    for (r, c), cnt in bins.items():
+        if cnt >= p95:
+            ci = 2
+        elif cnt >= p85:
+            ci = 1
+        else:
+            ci = 0
+        opacity = max(15, min(80, int(cnt / max(1, p95) * 70)))
+        score = min(100, int(math.log(1 + cnt) / math.log(1 + max_count) * 100))
+        lat_min = round(r * cell_size, 6)
+        lon_min = round(c * cell_size, 6)
+        result.append([lat_min, lon_min, cnt, ci, opacity, score])
+
+    return result
 
 
 def generate_map(scenes):
@@ -59,17 +103,34 @@ def generate_map(scenes):
             "total_points": sum(len(s.get("points", [])) for s in ss),
         }
 
-    date_points = {}
+    # Collect raw points per date
+    date_raw_points = {}
     for d in dates:
-        all_pts = []
+        pts = []
         for s in date_scenes[d]:
             for pt in s.get("points", []):
-                all_pts.append([pt[0], pt[1]])
-        date_points[d] = all_pts
+                pts.append((pt[0], pt[1]))
+        date_raw_points[d] = pts
+
+    total_points = sum(len(v) for v in date_raw_points.values())
+
+    # Pre-bin at each zoom level
+    print(f"Pre-binning {total_points:,} points at {len(GRID_SIZES)} zoom levels...")
+    # Structure: {date: {zoom: [[latMin, lonMin, count, colorIdx, opacity100, score], ...]}}
+    date_bins = {}
+    for d in dates:
+        date_bins[d] = {}
+        pts = date_raw_points[d]
+        for zoom, cs in GRID_SIZES.items():
+            date_bins[d][zoom] = prebin_points(pts, cs)
+        print(f"  {d}: {len(pts):,} pts -> z6:{len(date_bins[d][6])} z8:{len(date_bins[d][8])} z10:{len(date_bins[d][10])} z11:{len(date_bins[d][11])} bins")
 
     center_lat = sum(p[0] for p in AOI_LEAFLET) / len(AOI_LEAFLET)
     center_lon = sum(p[1] for p in AOI_LEAFLET) / len(AOI_LEAFLET)
-    total_points = sum(len(v) for v in date_points.values())
+
+    # Serialize bins compactly
+    grid_sizes_js = json.dumps(GRID_SIZES)
+    date_bins_js = json.dumps(date_bins, separators=(',', ':'))
 
     html = f"""<!DOCTYPE html>
 <html>
@@ -169,6 +230,12 @@ def generate_map(scenes):
     #info-panel .value {{ color: #00ff88; }}
     #info-panel .warn {{ color: #ff6600; }}
     #info-panel .crit {{ color: #ff0040; }}
+    #opacity-slider::-webkit-slider-thumb, #score-slider::-webkit-slider-thumb {{
+        -webkit-appearance: none; appearance: none;
+        width: 12px; height: 12px; background: #00ff88;
+        border-radius: 50%; cursor: pointer;
+        box-shadow: 0 0 6px rgba(0,255,136,0.6);
+    }}
 
     .leaflet-popup-content-wrapper {{
         background: transparent !important;
@@ -210,6 +277,16 @@ def generate_map(scenes):
     <span style="display:inline-block;width:10px;height:10px;background:#ff6600;margin:2px 4px 0 0;vertical-align:middle;"></span><span class="warn">MODERATE (top 15%)</span><br>
     <span style="display:inline-block;width:10px;height:10px;background:#ff0040;margin:2px 4px 0 0;vertical-align:middle;"></span><span class="crit">HIGH (top 5%)</span>
     </div>
+    <div style="margin-top:6px;border-top:1px solid #222;padding-top:4px;">
+    <span class="label">RFI OPACITY:</span> <span class="value" id="opacity-val">100%</span><br>
+    <input type="range" id="opacity-slider" min="0" max="100" value="100" step="5"
+        style="width:100%;margin-top:4px;-webkit-appearance:none;appearance:none;height:3px;background:#1a1a1a;outline:none;border:1px solid #333;">
+    </div>
+    <div style="margin-top:6px;border-top:1px solid #222;padding-top:4px;">
+    <span class="label">MIN RFI SCORE:</span> <span class="value" id="score-val">0</span><br>
+    <input type="range" id="score-slider" min="0" max="100" value="0" step="1"
+        style="width:100%;margin-top:4px;-webkit-appearance:none;appearance:none;height:3px;background:#1a1a1a;outline:none;border:1px solid #333;">
+    </div>
 </div>
 <div id="map"></div>
 <div id="timeline">
@@ -227,18 +304,27 @@ def generate_map(scenes):
 <script>
     var dates = {json.dumps(dates)};
     var dateStats = {json.dumps(date_stats)};
-    var datePoints = {json.dumps(date_points)};
+    var gridSizes = {grid_sizes_js};
+    var dateBins = {date_bins_js};
+
+    var COLORS = ['#00ff88', '#ff6600', '#ff0040'];
+    var LEVELS = ['LOW', 'MODERATE', 'HIGH'];
 
     var currentIdx = 0;
     var playing = false;
     var playInterval = null;
     var showAllMode = false;
+    var rfiOpacity = 1.0;
+    var minScore = 0;
+
+    var canvasRenderer = L.canvas({{ padding: 0.3 }});
 
     var map = L.map('map', {{
         center: [{center_lat}, {center_lon}],
         zoom: 6,
         zoomControl: false,
-        attributionControl: false
+        attributionControl: false,
+        preferCanvas: true
     }});
 
     var esriSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}', {{
@@ -261,76 +347,10 @@ def generate_map(scenes):
         color: '#00ff88', weight: 1.5, fillOpacity: 0, dashArray: '8,4', opacity: 0.5
     }}).addTo(map);
 
-    function gridSize(zoom) {{
-        if (zoom <= 5) return 0.5;
-        if (zoom <= 6) return 0.25;
-        if (zoom <= 7) return 0.1;
-        if (zoom <= 8) return 0.05;
-        if (zoom <= 9) return 0.025;
-        if (zoom <= 10) return 0.01;
-        if (zoom <= 11) return 0.005;
-        if (zoom <= 12) return 0.002;
-        return 0.001;
-    }}
-
-    function binPoints(points, cellSize) {{
-        var bins = {{}};
-        for (var i = 0; i < points.length; i++) {{
-            var lat = points[i][0];
-            var lon = points[i][1];
-            var r = Math.floor(lat / cellSize);
-            var c = Math.floor(lon / cellSize);
-            var key = r + ',' + c;
-            if (!bins[key]) {{
-                bins[key] = {{count: 0, latMin: r * cellSize, lonMin: c * cellSize}};
-            }}
-            bins[key].count++;
-        }}
-
-        var counts = [];
-        for (var k in bins) {{ counts.push(bins[k].count); }}
-        counts.sort(function(a,b) {{ return a - b; }});
-        var p50 = counts[Math.floor(counts.length * 0.5)] || 1;
-        var p85 = counts[Math.floor(counts.length * 0.85)] || 1;
-        var p95 = counts[Math.floor(counts.length * 0.95)] || 1;
-
-        var features = [];
-        for (var k in bins) {{
-            var b = bins[k];
-            var c = b.count;
-            var color, level;
-            if (c >= p95) {{
-                color = '#ff0040'; level = 'HIGH';
-            }} else if (c >= p85) {{
-                color = '#ff6600'; level = 'MODERATE';
-            }} else {{
-                color = '#00ff88'; level = 'LOW';
-            }}
-            var opacity = Math.max(0.15, Math.min(0.8, c / Math.max(1, p95) * 0.7));
-            var maxCount = counts[counts.length - 1] || 1;
-            var score = Math.round(Math.min(100, Math.log(1 + c) / Math.log(1 + maxCount) * 100));
-            features.push({{
-                type: 'Feature',
-                geometry: {{
-                    type: 'Polygon',
-                    coordinates: [[
-                        [b.lonMin, b.latMin],
-                        [b.lonMin + cellSize, b.latMin],
-                        [b.lonMin + cellSize, b.latMin + cellSize],
-                        [b.lonMin, b.latMin + cellSize],
-                        [b.lonMin, b.latMin]
-                    ]]
-                }},
-                properties: {{
-                    count: b.count,
-                    opacity: opacity,
-                    color: color,
-                    level: level,
-                    score: score
-                }}
-            }});
-        }}
-        return features;
+    function getZoomKey(zoom) {{
+        if (zoom <= 5) return '5';
+        if (zoom >= 11) return '11';
+        return '' + zoom;
     }}
 
     var activeLayers = [];
@@ -343,40 +363,50 @@ def generate_map(scenes):
     }}
 
     function renderDate(dateStr) {{
-        var pts = datePoints[dateStr] || [];
-        var zoom = map.getZoom();
-        var cs = gridSize(zoom);
-        var features = binPoints(pts, cs);
+        var zk = getZoomKey(map.getZoom());
+        var cs = gridSizes[zk];
+        var bins = dateBins[dateStr] && dateBins[dateStr][zk];
+        if (!bins || bins.length === 0) return;
 
-        var layer = L.geoJSON({{type: 'FeatureCollection', features: features}}, {{
-            style: function(f) {{
-                var p = f.properties;
-                return {{
-                    fillColor: p.color,
-                    fillOpacity: p.opacity,
-                    color: p.color,
-                    weight: 0.5,
-                    opacity: 0.6
-                }};
-            }},
-            onEachFeature: function(f, layer) {{
-                var p = f.properties;
-                var scoreColor = p.score > 75 ? '#ff0040' : p.score > 40 ? '#ff6600' : '#00ff88';
-                layer.bindPopup(
-                    '<div style="font-family:Courier New,monospace;color:#00ff88;background:#0a0a0a;padding:8px;border:1px solid #00ff88;font-size:11px;">' +
-                    '<div style="color:#ff0040;font-weight:bold;margin-bottom:4px;">// SIGNAL INTERCEPT</div>' +
-                    '<b>DATE:</b> ' + dateStr + '<br>' +
-                    '<b>RFI SCORE:</b> <span style="color:' + scoreColor + '">' + p.score + '/100</span><br>' +
-                    '<b>DENSITY:</b> <span style="color:' + p.color + '">' + p.level + '</span><br>' +
-                    '<b>RFI PIXELS:</b> ' + p.count + '<br>' +
-                    '<b>GRID:</b> ' + cs.toFixed(4) + '&deg;' +
-                    '</div>',
-                    {{className: 'spy-popup'}}
-                );
-            }}
-        }});
-        layer.addTo(map);
-        activeLayers.push(layer);
+        // Viewport culling
+        var bounds = map.getBounds();
+        var south = bounds.getSouth() - cs;
+        var north = bounds.getNorth() + cs;
+        var west = bounds.getWest() - cs;
+        var east = bounds.getEast() + cs;
+
+        var group = L.layerGroup();
+        for (var i = 0; i < bins.length; i++) {{
+            var b = bins[i];
+            // b = [latMin, lonMin, count, colorIdx, opacity100, score]
+            var latMin = b[0], lonMin = b[1];
+            if (latMin > north || latMin + cs < south || lonMin > east || lonMin + cs < west) continue;
+            if (b[5] < minScore) continue;
+
+            var color = COLORS[b[3]];
+            var fillOp = (b[4] / 100.0) * rfiOpacity;
+            var strokeOp = 0.6 * rfiOpacity;
+
+            var rect = L.rectangle(
+                [[latMin, lonMin], [latMin + cs, lonMin + cs]],
+                {{ fillColor: color, fillOpacity: fillOp, color: color, weight: 0.5, opacity: strokeOp, renderer: canvasRenderer }}
+            );
+            var cnt = b[2], scoreVal = b[5], level = LEVELS[b[3]];
+            rect.bindPopup(
+                '<div style="font-family:Courier New,monospace;color:#00ff88;background:#0a0a0a;padding:8px;border:1px solid #00ff88;font-size:11px;">' +
+                '<div style="color:#ff0040;font-weight:bold;margin-bottom:4px;">// SIGNAL INTERCEPT</div>' +
+                '<b>DATE:</b> ' + dateStr + '<br>' +
+                '<b>RFI SCORE:</b> <span style="color:' + (scoreVal > 75 ? '#ff0040' : scoreVal > 40 ? '#ff6600' : '#00ff88') + '">' + scoreVal + '/100</span><br>' +
+                '<b>DENSITY:</b> <span style="color:' + color + '">' + level + '</span><br>' +
+                '<b>RFI PIXELS:</b> ' + cnt + '<br>' +
+                '<b>GRID:</b> ' + cs.toFixed(4) + '&deg;' +
+                '</div>',
+                {{className: 'spy-popup'}}
+            );
+            group.addLayer(rect);
+        }}
+        group.addTo(map);
+        activeLayers.push(group);
     }}
 
     function renderCurrent() {{
@@ -391,6 +421,10 @@ def generate_map(scenes):
     }}
 
     map.on('zoomend', function() {{
+        renderCurrent();
+    }});
+
+    map.on('moveend', function() {{
         renderCurrent();
     }});
 
@@ -439,9 +473,7 @@ def generate_map(scenes):
             btn.classList.add('active');
             renderCurrent();
             document.getElementById('current-date').textContent = 'ALL DATES';
-            var total = 0;
-            for (var i = 0; i < dates.length; i++) total += (datePoints[dates[i]] || []).length;
-            document.getElementById('current-stats').textContent = 'SHOWING ALL ' + total + ' DETECTIONS';
+            document.getElementById('current-stats').textContent = 'SHOWING ALL DATES';
         }} else {{
             btn.classList.remove('active');
             updateDisplay(currentIdx);
@@ -452,10 +484,22 @@ def generate_map(scenes):
         updateDisplay(parseInt(e.target.value));
     }});
 
+    document.getElementById('opacity-slider').addEventListener('input', function(e) {{
+        rfiOpacity = parseInt(e.target.value) / 100.0;
+        document.getElementById('opacity-val').textContent = e.target.value + '%';
+        renderCurrent();
+    }});
+
+    document.getElementById('score-slider').addEventListener('input', function(e) {{
+        minScore = parseInt(e.target.value);
+        document.getElementById('score-val').textContent = e.target.value;
+        renderCurrent();
+    }});
+
     var baseMaps = {{"SATELLITE": esriSat, "DARK": cartoDark}};
     var overlayMaps = {{"AOI BOUNDARY": aoiPoly, "LABELS": cartoLabels}};
     L.control.layers(baseMaps, overlayMaps, {{collapsed: false, position: 'topleft'}}).addTo(map);
-    L.control.zoom({{position: 'bottomright'}}).addTo(map);
+    L.control.zoom({{position: 'topleft'}}).addTo(map);
 
     updateDisplay(0);
 </script>

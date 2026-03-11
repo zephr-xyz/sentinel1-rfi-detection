@@ -274,10 +274,10 @@ def generate_map(scenes):
     for (var j = 0; j < jammerSites.length; j++) {{
         var site = jammerSites[j];
         var m = L.circleMarker([site.lat, site.lon], {{
-            radius: 8, color: '#ff0040', fillColor: '#ff0040', fillOpacity: 0.8, weight: 2
+            radius: 8, color: '#ffffff', fillColor: '#ffffff', fillOpacity: 0.9, weight: 2
         }});
         m.bindPopup(
-            '<div style="font-family:Courier New,monospace;color:#ff0040;background:#0a0a0a;padding:8px;border:1px solid #ff0040;font-size:11px;">' +
+            '<div style="font-family:Courier New,monospace;color:#ffffff;background:#0a0a0a;padding:8px;border:1px solid #ffffff;font-size:11px;">' +
             '<div style="font-weight:bold;margin-bottom:4px;">// JAMMER SITE</div>' +
             '<b>LOCATION:</b> ' + site.name.toUpperCase() + ' / AND&Oslash;YA<br>' +
             '<b>COORDS:</b> ' + site.lat.toFixed(4) + 'N, ' + site.lon.toFixed(4) + 'E<br>' +
@@ -292,7 +292,7 @@ def generate_map(scenes):
         var label = L.marker([site.lat, site.lon], {{
             icon: L.divIcon({{
                 className: '',
-                html: '<div style="font-family:Share Tech Mono,monospace;color:#ff0040;font-size:10px;text-shadow:0 0 4px #000,0 0 8px #000;white-space:nowrap;pointer-events:none;margin-left:12px;margin-top:-6px;">' + site.name.toUpperCase() + '</div>',
+                html: '<div style="font-family:Share Tech Mono,monospace;color:#ffffff;font-size:10px;text-shadow:0 0 4px #000,0 0 8px #000;white-space:nowrap;pointer-events:none;margin-left:12px;margin-top:-6px;">' + site.name.toUpperCase() + '</div>',
                 iconSize: [0, 0]
             }})
         }});
@@ -305,10 +305,10 @@ def generate_map(scenes):
     var clusterLat = (69.2726 + 69.2480 + 69.2630) / 3;
     var clusterLon = (15.9554 + 15.9200 + 15.8100) / 3;
     var bleikRing20 = L.circle([clusterLat, clusterLon], {{
-        radius: 20000, color: '#ff0040', weight: 1, fillOpacity: 0, dashArray: '6,4', opacity: 0.5
+        radius: 20000, color: '#ffffff', weight: 1.5, fillOpacity: 0, dashArray: '6,4', opacity: 0.7
     }}).addTo(map);
     var bleikRing50 = L.circle([clusterLat, clusterLon], {{
-        radius: 50000, color: '#ff6600', weight: 1, fillOpacity: 0, dashArray: '6,4', opacity: 0.3
+        radius: 50000, color: '#ffffff', weight: 1, fillOpacity: 0, dashArray: '6,4', opacity: 0.4
     }}).addTo(map);
 
     function gridSize(zoom) {{
@@ -436,6 +436,10 @@ def generate_map(scenes):
         }} else {{
             renderDate(dates[currentIdx]);
         }}
+        // Bring jammer sites and range rings to front (above RFI grid)
+        bleikRing50.bringToFront();
+        bleikRing20.bringToFront();
+        jammerMarkers.eachLayer(function(l) {{ if (l.bringToFront) l.bringToFront(); }});
     }}
 
     map.on('zoomend', function() {{
